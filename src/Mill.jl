@@ -1,6 +1,7 @@
 __precompile__()
 module Mill
 using JSON, Flux, Adapt, MLDataPattern, SparseArrays, Statistics
+using Base.Threads: @threads, nthreads, threadid
 
 const COLORS = [:blue, :red, :green, :yellow, :cyan, :magenta]
 

@@ -8,7 +8,8 @@ Flux.@treelike LSE
 
 function _segmented_lse(x::Matrix, p::Vector, bags::Bags)
     o = zeros(eltype(x), size(x, 1), length(bags))
-    @inbounds for (j, b) in enumerate(bags)
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
         for bi in b
             for i in 1:size(x, 1)
                 o[i, j] += exp(p[i] * x[i, bi])
@@ -25,17 +26,19 @@ _segmented_lse_back(x::TrackedArray, p::Vector, bags::Bags, n::Matrix) = Δ -> b
     x = Flux.data(x)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    ss = zero(p)
-    @inbounds for (j, b) in enumerate(bags)
-        ss .= 0
+    ss = [zero(p) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
+        ss[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 e = exp(p[i] * x[i, bi])
                 dx[i, bi] = Δ[i, j] * e
-                ss[i] += e
+                ss[t][i] += e
             end
         end
-        dx[:, b] ./= ss
+        dx[:, b] ./= ss[t]
     end
     dx, nothing, nothing
 end
@@ -49,23 +52,25 @@ _segmented_lse_back(x::TrackedArray, p::TrackedVector, bags::Bags, n::Matrix) = 
     p = Flux.data(p)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    dp = zero(p)
-    ss1 = zero(p)
-    ss2 = zero(p)
-    @inbounds for (j, b) in enumerate(bags)
-        ss1 .= ss2 .= 0
+    dp = [zero(p) for _ in 1:nthreads()]
+    ss1 = [zero(p) for _ in 1:nthreads()]
+    ss2 = [zero(p) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
+        ss1[t] .= ss2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 e = exp(p[i] * x[i, bi])
                 dx[i, bi] = Δ[i, j] * e
-                ss1[i] += e
-                ss2[i] += x[i, bi] * e
+                ss1[t][i] += e
+                ss2[t][i] += x[i, bi] * e
             end
         end
-        dx[:, b] ./= ss1
-        dp .+= Δ[:, j] .* (ss2 ./ ss1 - n[:, j])
+        dx[:, b] ./= ss1[t]
+        dp[t] .+= Δ[:, j] .* (ss2[t] ./ ss1[t] - n[:, j])
     end
-    dx, dp ./ p, nothing
+    dx, reduce(+, dp) ./ p, nothing
 end
 
 _segmented_lse_back(x::TrackedArray, p::TrackedVector, bags::Bags, w::Vector, n::Matrix) = Δ -> begin
@@ -75,21 +80,23 @@ end
 _segmented_lse_back(x::Matrix, p::TrackedVector, bags::Bags, n::Matrix) = Δ -> begin
     p = Flux.data(p)
     Δ = Flux.data(Δ)
-    dp = zero(p)
-    ss1 = zero(p)
-    ss2 = zero(p)
-    @inbounds for (j, b) in enumerate(bags)
-        ss1 .= ss2 .= 0
+    dp = [zero(p) for _ in 1:nthreads()]
+    ss1 = [zero(p) for _ in 1:nthreads()]
+    ss2 = [zero(p) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
+        ss1[t] .= ss2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 e = exp(p[i] * x[i, bi])
-                ss1[i] += e
-                ss2[i] += x[i, bi] * e
+                ss1[t][i] += e
+                ss2[t][i] += x[i, bi] * e
             end
         end
-        dp .+= Δ[:, j] .* (ss2 ./ ss1 - n[:, j])
+        dp[t] .+= Δ[:, j] .* (ss2[t] ./ ss1[t] - n[:, j])
     end
-    nothing, dp ./ p, nothing, nothing
+    nothing, reduce(+, dp) ./ p, nothing, nothing
 end
 
 _segmented_lse_back(x::Matrix, p::TrackedVector, bags::Bags, w::Vector, n::Matrix) = Δ -> begin

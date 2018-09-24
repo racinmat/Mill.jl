@@ -12,7 +12,8 @@ inv_p_map(p) = log.(exp.(p-1) .- 1)
 
 function _segmented_pnorm(x::Matrix, p::Vector, c::Vector, bags::Bags)
     o = zeros(eltype(x), size(x, 1), length(bags))
-    @inbounds for (j, b) in enumerate(bags)
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
         for bi in b
             for i in 1:size(x, 1)
                 o[i, j] += abs(x[i, bi] - c[i]) ^ p[i] / length(b)
@@ -26,7 +27,8 @@ end
 function _segmented_pnorm(x::Matrix, p::Vector, c::Vector, bags::Bags, w::Vector)
     @assert all(w .> 0)
     o = zeros(eltype(x), size(x, 1), length(bags))
-    @inbounds for (j, b) in enumerate(bags)
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
         ws = sum(@view w[b])
         for bi in b
             for i in 1:size(x, 1)
@@ -42,7 +44,8 @@ _segmented_pnorm_back(x::TrackedArray, p::Vector, ρ::Vector, c::Vector, bags::B
     x = Flux.data(x)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    @inbounds for (j, b) in enumerate(bags)
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
         for bi in b
             for i in 1:size(x,1)
                 dx[i, bi] = Δ[i, j] * sign(x[i, bi] - c[i])
@@ -58,7 +61,8 @@ _segmented_pnorm_back(x::TrackedArray, p::Vector, ρ::Vector, c::Vector, bags::B
     x = Flux.data(x)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    @inbounds for (j, b) in enumerate(bags)
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
         ws = sum(@view w[b])
         for bi in b
             for i in 1:size(x,1)
@@ -78,15 +82,17 @@ _segmented_pnorm_back(x::TrackedArray, p::TrackedVector, ρ::TrackedVector, c::T
     c = Flux.data(c)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    dp = zero(p)
-    dps1 = zero(p)
-    dps2 = zero(p)
-    dc = zero(c)
-    dcs = zero(c)
-    @inbounds for (j, b) in enumerate(bags)
-        dcs .= 0
-        dps1 .= 0
-        dps2 .= 0
+    dp = [zero(p) for _ in 1:nthreads()]
+    dps1 = [zero(p) for _ in 1:nthreads()]
+    dps2 = [zero(p) for _ in 1:nthreads()]
+    dc = [zero(c) for _ in 1:nthreads()]
+    dcs = [zero(c) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
+        dcs[t] .= 0
+        dps1[t] .= 0
+        dps2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 ab = abs(x[i, bi] - c[i])
@@ -94,19 +100,19 @@ _segmented_pnorm_back(x::TrackedArray, p::TrackedVector, ρ::TrackedVector, c::T
                 dx[i, bi] = Δ[i, j] * sig
                 dx[i, bi] /= length(b)
                 dx[i, bi] *= (ab / n[i, j]) ^ (p[i] - 1)
-                dps1[i] += ab ^ p[i] * log(ab)
-                dps2[i] += ab ^ p[i]
-                dcs[i] -= sig * (ab ^ (p[i] - 1))
+                dps1[t][i] += ab ^ p[i] * log(ab)
+                dps2[t][i] += ab ^ p[i]
+                dcs[t][i] -= sig * (ab ^ (p[i] - 1))
             end
         end
-        t = n[:, j] ./ p .* (dps1 ./ dps2 .- (log.(dps2) .- log(max(1, length(b)))) ./ p)
-        dp .+= Δ[:, j] .* t
-        dcs ./= max(1, length(b))
-        dcs .*= n[:, j] .^ (1 .- p)
-        dc .+= Δ[:, j] .* dcs
+        tmp = n[:, j] ./ p .* (dps1[t] ./ dps2[t] .- (log.(dps2[t]) .- log(max(1, length(b)))) ./ p)
+        dp[t] .+= Δ[:, j] .* tmp
+        dcs[t] ./= max(1, length(b))
+        dcs[t] .*= n[:, j] .^ (1 .- p)
+        dc[t] .+= Δ[:, j] .* dcs[t]
     end
-    dρ = dp .* σ.(ρ)
-    dx, dρ, dc, nothing
+    dρ = reduce(+, dp) .* σ.(ρ)
+    dx, dρ, reduce(+, dc), nothing
 end
 
 _segmented_pnorm_back(x::TrackedArray, p::TrackedVector, ρ::TrackedVector, c::TrackedVector, bags::Bags, w::Vector, n::Matrix) = Δ -> begin
@@ -116,16 +122,18 @@ _segmented_pnorm_back(x::TrackedArray, p::TrackedVector, ρ::TrackedVector, c::T
     c = Flux.data(c)
     Δ = Flux.data(Δ)
     dx = zero(x)
-    dp = zero(p)
-    dps1 = zero(p)
-    dps2 = zero(p)
-    dc = zero(c)
-    dcs = zero(c)
-    @inbounds for (j, b) in enumerate(bags)
+    dp = [zero(p) for _ in 1:nthreads()]
+    dps1 = [zero(p) for _ in 1:nthreads()]
+    dps2 = [zero(p) for _ in 1:nthreads()]
+    dc = [zero(c) for _ in 1:nthreads()]
+    dcs = [zero(c) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
         ws = sum(@view w[b])
-        dcs .= 0
-        dps1 .= 0
-        dps2 .= 0
+        dcs[t] .= 0
+        dps1[t] .= 0
+        dps2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 ab = abs(x[i, bi] - c[i])
@@ -133,19 +141,19 @@ _segmented_pnorm_back(x::TrackedArray, p::TrackedVector, ρ::TrackedVector, c::T
                 dx[i, bi] = Δ[i, j] * w[bi] * sig
                 dx[i, bi] /= ws
                 dx[i, bi] *= (ab / n[i, j]) ^ (p[i] - 1)
-                dps1[i] += w[bi] * ab ^ p[i] * log(ab)
-                dps2[i] += w[bi] * ab ^ p[i]
-                dcs[i] -= w[bi] * sig * (ab ^ (p[i] - 1))
+                dps1[t][i] += w[bi] * ab ^ p[i] * log(ab)
+                dps2[t][i] += w[bi] * ab ^ p[i]
+                dcs[t][i] -= w[bi] * sig * (ab ^ (p[i] - 1))
             end
         end
-        t = n[:, j] ./ p .* (dps1 ./ dps2 .- (log.(dps2) .- log(ws)) ./ p)
-        dp .+= Δ[:, j] .* t
-        dcs ./= ws
-        dcs .*= n[:, j] .^ (1 .- p)
-        dc .+= Δ[:, j] .* dcs
+        tmp = n[:, j] ./ p .* (dps1[t] ./ dps2[t] .- (log.(dps2[t]) .- log(ws)) ./ p)
+        dp[t] .+= Δ[:, j] .* tmp
+        dcs[t] ./= ws
+        dcs[t] .*= n[:, j] .^ (1 .- p)
+        dc[t] .+= Δ[:, j] .* dcs[t]
     end
-    dρ = dp .* σ.(ρ)
-    dx, dρ, dc, nothing, nothing
+    dρ = reduce(+, dp) .* σ.(ρ)
+    dx, dρ, reduce(+, dc), nothing, nothing
 end
 
 _segmented_pnorm_back(x::Matrix, p::TrackedVector, ρ::TrackedVector, c::TrackedVector, bags::Bags, n::Matrix) = Δ -> begin
@@ -153,32 +161,34 @@ _segmented_pnorm_back(x::Matrix, p::TrackedVector, ρ::TrackedVector, c::Tracked
     ρ = Flux.data(ρ)
     c = Flux.data(c)
     Δ = Flux.data(Δ)
-    dp = zero(p)
-    dps1 = zero(p)
-    dps2 = zero(p)
-    dc = zero(c)
-    dcs = zero(c)
-    @inbounds for (j, b) in enumerate(bags)
-        dcs .= 0
-        dps1 .= 0
-        dps2 .= 0
+    dp = [zero(p) for _ in 1:nthreads()]
+    dps1 = [zero(p) for _ in 1:nthreads()]
+    dps2 = [zero(p) for _ in 1:nthreads()]
+    dc = [zero(c) for _ in 1:nthreads()]
+    dcs = [zero(c) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
+        dcs[t] .= 0
+        dps1[t] .= 0
+        dps2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 ab = abs(x[i, bi] - c[i])
                 sig = sign(x[i, bi] - c[i])
-                dps1[i] +=  ab ^ p[i] * log(ab)
-                dps2[i] +=  ab ^ p[i]
-                dcs[i] -= sig * (ab ^ (p[i] - 1))
+                dps1[t][i] +=  ab ^ p[i] * log(ab)
+                dps2[t][i] +=  ab ^ p[i]
+                dcs[t][i] -= sig * (ab ^ (p[i] - 1))
             end
         end
-        t = n[:, j] ./ p .* (dps1 ./ dps2 .- (log.(dps2) .- log(max(1, length(b)))) ./ p)
-        dp .+= Δ[:, j] .* t
-        dcs ./= max(1, length(b))
-        dcs .*= n[:, j] .^ (1 .- p)
-        dc .+= Δ[:, j] .* dcs
+        tmp = n[:, j] ./ p .* (dps1[t] ./ dps2[t] .- (log.(dps2[t]) .- log(max(1, length(b)))) ./ p)
+        dp[t] .+= Δ[:, j] .* tmp
+        dcs[t] ./= max(1, length(b))
+        dcs[t] .*= n[:, j] .^ (1 .- p)
+        dc[t] .+= Δ[:, j] .* dcs[t]
     end
-    dρ = dp .* σ.(ρ)
-    nothing, dρ, dc, nothing
+    dρ = reduce(+, dp) .* σ.(ρ)
+    nothing, dρ, reduce(+, dc), nothing
 end
 
 _segmented_pnorm_back(x::Matrix, p::TrackedVector, ρ::TrackedVector, c::TrackedVector, bags::Bags, w::Vector, n::Matrix) = Δ -> begin
@@ -186,33 +196,35 @@ _segmented_pnorm_back(x::Matrix, p::TrackedVector, ρ::TrackedVector, c::Tracked
     ρ = Flux.data(ρ)
     c = Flux.data(c)
     Δ = Flux.data(Δ)
-    dp = zero(p)
-    dps1 = zero(p)
-    dps2 = zero(p)
-    dc = zero(c)
-    dcs = zero(c)
-    @inbounds for (j, b) in enumerate(bags)
+    dp = [zero(p) for _ in 1:nthreads()]
+    dps1 = [zero(p) for _ in 1:nthreads()]
+    dps2 = [zero(p) for _ in 1:nthreads()]
+    dc = [zero(c) for _ in 1:nthreads()]
+    dcs = [zero(c) for _ in 1:nthreads()]
+    @inbounds Threads.@threads for j in 1:length(bags)
+        b = bags[j]
+        t = threadid()
         ws = sum(@view w[b])
-        dcs .= 0
-        dps1 .= 0
-        dps2 .= 0
+        dcs[t] .= 0
+        dps1[t] .= 0
+        dps2[t] .= 0
         for bi in b
             for i in 1:size(x,1)
                 ab = abs(x[i, bi] - c[i])
                 sig = sign(x[i, bi] - c[i])
-                dps1[i] +=  w[bi] * ab ^ p[i] * log(ab)
-                dps2[i] +=  w[bi] * ab ^ p[i]
-                dcs[i] -= w[bi] * sig * (ab ^ (p[i] - 1))
+                dps1[t][i] +=  w[bi] * ab ^ p[i] * log(ab)
+                dps2[t][i] +=  w[bi] * ab ^ p[i]
+                dcs[t][i] -= w[bi] * sig * (ab ^ (p[i] - 1))
             end
         end
-        t = n[:, j] ./ p .* (dps1 ./ dps2 .- (log.(dps2) .- log(ws)) ./ p)
-        dp .+= Δ[:, j] .* t
-        dcs ./= ws
-        dcs .*= n[:, j] .^ (1 .- p)
-        dc .+= Δ[:, j] .* dcs
+        tmp = n[:, j] ./ p .* (dps1[t] ./ dps2[t] .- (log.(dps2[t]) .- log(ws)) ./ p)
+        dp[t] .+= Δ[:, j] .* tmp
+        dcs[t] ./= ws
+        dcs[t] .*= n[:, j] .^ (1 .- p)
+        dc[t] .+= Δ[:, j] .* dcs[t]
     end
-    dρ = dp .* σ.(ρ)
-    nothing, dρ, dc, nothing, nothing
+    dρ = reduce(+, dp) .* σ.(ρ)
+    nothing, dρ, reduce(+, dc), nothing, nothing
 end
 
 (n::PNorm)(x, args...) = _segmented_pnorm(x, p_map(Flux.data(n.ρ)), Flux.data(n.c), args...)
