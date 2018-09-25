@@ -1,3 +1,4 @@
+import Base: show
 include("segmented_mean.jl")
 include("segmented_max.jl")
 include("segmented_pnorm.jl")

@@ -6,6 +6,8 @@ end
 LSE(d::Int) = LSE(param(randn(d)))
 Flux.@treelike LSE
 
+Base.show(io::IO, n::LSE{T}) where T = println(io, "LogSumExp{$T}($(length(n.p)))")
+
 function _segmented_lse(x::Matrix, p::Vector, bags::Bags)
     o = zeros(eltype(x), size(x, 1), length(bags))
     @inbounds Threads.@threads for j in 1:length(bags)
