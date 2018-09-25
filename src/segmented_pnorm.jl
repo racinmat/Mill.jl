@@ -10,7 +10,7 @@ Flux.@treelike PNorm
 p_map(ρ) = 1 .+ log.(1 .+ exp.(ρ))
 inv_p_map(p) = log.(exp.(p-1) .- 1)
 
-Base.show(io::IO, n::PNorm{T}) where T = println(io, "PNorm{$T}($(length(n.ρ)))")
+Base.show(io::IO, n::PNorm) = print(io, "PNorm($(length(n.ρ)))")
 
 function _segmented_pnorm(x::Matrix, p::Vector, c::Vector, bags::Bags)
     o = zeros(eltype(x), size(x, 1), length(bags))
